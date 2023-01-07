@@ -445,10 +445,10 @@ class QualificationAppInfo(
           e.children.map(x => x.filterNot(_.isSupported))
         }.flatten
         topLevelExecs ++ childrenExecs
-      }.map(_.exec).toSet.mkString(";").trim
+      }.map(_.exec).toSet.mkString(";").trim.filter(_ >= ' ')
       // Get all the unsupported Expressions from the plan
       val unSupportedExprs = origPlanInfos.map(_.execInfo.flatMap(
-        _.unsupportedExprs)).flatten.filter(_.nonEmpty).toSet.mkString(";").trim
+        _.unsupportedExprs)).flatten.filter(_.nonEmpty).toSet.mkString(";").trim.filter(_ >= ' ')
 
       // get the ratio based on the Task durations that we will use for wall clock durations
       val estimatedGPURatio = if (sqlDataframeTaskDuration > 0) {
@@ -468,7 +468,8 @@ class QualificationAppInfo(
         nonSQLTaskDuration, unsupportedSQLTaskDuration, supportedSQLTaskDuration,
         taskSpeedupFactor, info.sparkUser, info.startTime, origPlanInfos,
         perSqlStageSummary.map(_.stageSum).flatten, estimatedInfo, perSqlInfos,
-        unSupportedExecs, unSupportedExprs, clusterTags, allClusterTagsMap)
+        unSupportedExecs, unSupportedExprs, clusterTags, allClusterTagsMap,
+        eventLogInfo.map(_.eventLog.toString).getOrElse(""))
     }
   }
 
@@ -598,7 +599,8 @@ case class QualificationSummaryInfo(
     unSupportedExecs: String,
     unSupportedExprs: String,
     clusterTags: String,
-    allClusterTagsMap: Map[String, String])
+    allClusterTagsMap: Map[String, String],
+    eventLogPath: String)
 
 case class StageQualSummaryInfo(
     stageId: Int,

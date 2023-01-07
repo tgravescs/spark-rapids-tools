@@ -274,7 +274,8 @@ case class FormattedQualificationSummaryInfo(
     endDurationEstimated: Boolean,
     unSupportedExecs: String,
     unSupportedExprs: String,
-    clusterTags: Map[String, String])
+    clusterTags: Map[String, String],
+    eventLogPath: String)
 
 object QualOutputWriter {
   val NON_SQL_TASK_DURATION_STR = "NonSQL Task Duration"
@@ -323,6 +324,7 @@ object QualOutputWriter {
   val CLUSTER_ID = "ClusterId"
   val JOB_ID = "JobId"
   val RUN_NAME = "RunName"
+  val EVENTLOG_PATH_STR = "EventLog Path"
 
   val APP_DUR_STR_SIZE: Int = APP_DUR_STR.size
   val SQL_DUR_STR_SIZE: Int = SQL_DUR_STR.size
@@ -472,7 +474,9 @@ object QualOutputWriter {
       SPEEDUP_FACTOR_STR -> SPEEDUP_FACTOR_STR.size,
       APP_DUR_ESTIMATED_STR -> APP_DUR_ESTIMATED_STR.size,
       UNSUPPORTED_EXECS -> UNSUPPORTED_EXECS.size,
-      UNSUPPORTED_EXPRS -> UNSUPPORTED_EXPRS.size
+      UNSUPPORTED_EXPRS -> UNSUPPORTED_EXPRS.size,
+      EVENTLOG_PATH_STR ->
+        getMaxSizeForHeader(appInfos.map(_.eventLogPath.size), EVENTLOG_PATH_STR)
     )
     if (appInfos.exists(_.clusterTags.nonEmpty)) {
       detailedHeadersAndFields += (CLUSTER_TAGS -> getMaxSizeForHeader(
@@ -745,7 +749,8 @@ object QualOutputWriter {
       appInfo.endDurationEstimated,
       appInfo.unSupportedExecs,
       appInfo.unSupportedExprs,
-      appInfo.allClusterTagsMap
+      appInfo.allClusterTagsMap,
+      appInfo.eventLogPath
     )
   }
 
@@ -779,7 +784,8 @@ object QualOutputWriter {
       appInfo.taskSpeedupFactor.toString -> headersAndSizes(SPEEDUP_FACTOR_STR),
       appInfo.endDurationEstimated.toString -> headersAndSizes(APP_DUR_ESTIMATED_STR),
       appInfo.unSupportedExecs -> headersAndSizes(UNSUPPORTED_EXECS),
-      appInfo.unSupportedExprs -> headersAndSizes(UNSUPPORTED_EXPRS)
+      appInfo.unSupportedExprs -> headersAndSizes(UNSUPPORTED_EXPRS),
+      stringIfempty(appInfo.eventLogPath) -> headersAndSizes(EVENTLOG_PATH_STR)
     )
     if (appInfo.clusterTags.nonEmpty) {
       data += appInfo.clusterTags.mkString(";") -> headersAndSizes(CLUSTER_TAGS)
