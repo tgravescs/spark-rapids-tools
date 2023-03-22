@@ -16,6 +16,7 @@
 
 package com.nvidia.spark.rapids.tool
 
+import java.io._
 import java.io.FileNotFoundException
 import java.time.LocalDateTime
 import java.util.zip.ZipOutputStream
@@ -84,6 +85,32 @@ object EventLogPathProcessor extends Logging {
     (dbLogFiles.size > 1)
   }
 
+  def recursiveList(fileStatus: FileStatus, fs: FileSystem): Array[FileStatus] = {
+    require(fileStatus.isDirectory)
+    val (eventLogs, nonEventLogs) = fs.listStatus(fileStatus.getPath)
+      .partition { s =>
+        val name = s.getPath().getName()
+        ((s.isFile && eventLogNameFilter(s.getPath)) ||
+          (s.isDirectory && (isEventLogDir(name) || isDatabricksEventLogDir(s, fs))))
+      }
+    val result = eventLogs.toBuffer
+    val dirList = nonEventLogs.filter(_.isDirectory).toBuffer
+    while (dirList.nonEmpty) {
+      val curDir = dirList.remove(0)
+      val files = fs.listStatus(curDir.getPath)
+      val fileList = files.filter(_.isFile)
+      result ++= fileList.filter(e => eventLogNameFilter(e.getPath))
+      val dirsToLookAt = files.filter(_.isDirectory)
+      val (eventLogDirs, notEventLogDirs) = dirsToLookAt.partition { s =>
+        val name = s.getPath.getName
+        s.isDirectory && (isEventLogDir(name) || isDatabricksEventLogDir(s, fs))
+      }
+      result ++= eventLogDirs
+      dirList ++= notEventLogDirs
+    }
+    result.toArray
+  }
+
   def getEventLogInfo(pathString: String, hadoopConf: Configuration): Map[EventLogInfo, Long] = {
     val inputPath = new Path(pathString)
     val fs = inputPath.getFileSystem(hadoopConf)
@@ -107,17 +134,25 @@ object EventLogPathProcessor extends Logging {
         val dbinfo = DatabricksEventLog(fileStatus.getPath).asInstanceOf[EventLogInfo]
         Map(dbinfo -> fileStatus.getModificationTime)
       } else {
-        // assume either single event log or directory with event logs in it, we don't
-        // support nested dirs, so if event log dir within another one we skip it
         val (validLogs, invalidLogs) = fs.listStatus(inputPath).partition(s => {
             val name = s.getPath().getName()
             (s.isFile ||
               (s.isDirectory && (isEventLogDir(name) || isDatabricksEventLogDir(s, fs))))
           })
-        if (invalidLogs.nonEmpty) {
-          logWarning("Skipping the following directories: " +
-            s"${invalidLogs.map(_.getPath().getName()).mkString(", ")}")
+        val allRecursiveEventLogFilesAndDirs = {
+          if (invalidLogs.nonEmpty) {
+            // logWarning("Skipping the following directories: " +
+            //  s"${invalidLogs.map(_.getPath().getName()).mkString(", ")}")
+            // recurse to find only files which are event logs
+            invalidLogs.flatMap(fileStatus => recursiveList(fileStatus, fs))
+          } else {
+            Array.empty[FileStatus]
+          }
         }
+        logWarning(s"all recursively found files/dir, num ${allRecursiveEventLogFilesAndDirs.length} " +
+          s"files are: ${allRecursiveEventLogFilesAndDirs.map(_.getPath).mkString(",")}")
+
+
         val (logsSupported, unsupport) = validLogs.partition { l =>
           (l.isFile && eventLogNameFilter(l.getPath())) || l.isDirectory
         }
@@ -127,7 +162,8 @@ object EventLogPathProcessor extends Logging {
             s"${SPARK_SHORT_COMPRESSION_CODEC_NAMES_FOR_FILTER.mkString(", ")}. " +
             "Skipping these files.")
         }
-        logsSupported.map { s =>
+        val allValid = logsSupported ++ allRecursiveEventLogFilesAndDirs
+        allValid.map { s =>
           if (s.isFile || (s.isDirectory && isEventLogDir(s.getPath().getName()))) {
             (ApacheSparkEventLog(s.getPath).asInstanceOf[EventLogInfo] -> s.getModificationTime)
           } else {
