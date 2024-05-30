@@ -453,15 +453,25 @@ class AutoTuner(
    * Assumption - cluster properties were updated to have a default values if missing.
    */
   def calcNumExecutorCores: Int = {
-    // clusterProps.gpu.getCount can never be 0. This is verified in processPropsAndCheck()
-    val executorsPerNode = clusterProps.gpu.getCount
-    Math.max(1, clusterProps.system.getNumCores / executorsPerNode)
+    val clusterInfoEventLog = appInfoProvider.getClusterInfo.flatMap(_.clusterInfo)
+    if (clusterInfoEventLog.isDefined) {
+      clusterInfoEventLog.get.coresPerExecutor
+    } else {
+      if (processPropsAndCheck) {
+        val executorsPerNode = clusterProps.gpu.getCount
+        // clusterProps.gpu.getCount can never be 0. This is verified in processPropsAndCheck()
+        Math.max(1, clusterProps.system.getNumCores / executorsPerNode)
+      } else {
+        0
+      }
+    }
   }
 
   /**
    * Recommendation for 'spark.task.resource.gpu.amount' based on num of cpu cores.
    */
   def calcTaskGPUAmount(numExecCoresCalculator: () => Int): Double = {
+    // TODO - what to use if cluster info from event log???
     val numExecutorCores =  numExecCoresCalculator.apply()
     // can never be 0 since numExecutorCores has to be at least 1
     1.0 / numExecutorCores
@@ -481,11 +491,21 @@ class AutoTuner(
    * Assumption - cluster properties were updated to have a default values if missing.
    */
   private def calcAvailableMemPerExec(): Double = {
-    // account for system overhead
-    val usableWorkerMem =
-      Math.max(0, StringUtils.convertToMB(clusterProps.system.memory) - DEF_SYSTEM_RESERVE_MB)
-    // clusterProps.gpu.getCount can never be 0. This is verified in processPropsAndCheck()
-    (1.0 * usableWorkerMem) / clusterProps.gpu.getCount
+    val clusterInfoEventLog = appInfoProvider.getClusterInfo.flatMap(_.clusterInfo)
+    if (clusterInfoEventLog.isDefined) {
+      clusterInfoEventLog.get.executorMemoryMB.getOrElse(0.0)
+    } else {
+      if (processPropsAndCheck) {
+        // account for system overhead
+        val usableWorkerMem =
+        Math.max(0, StringUtils.convertToMB(clusterProps.system.memory) - DEF_SYSTEM_RESERVE_MB)
+        // clusterProps.gpu.getCount can never be 0. This is verified in processPropsAndCheck()
+        (1.0 * usableWorkerMem) / clusterProps.gpu.getCount
+      } else {
+        0.0
+      }
+    }
+
   }
 
   /**
@@ -1020,7 +1040,9 @@ class AutoTuner(
       skippedRecommendations ++= platform.recommendationsToExclude
       initRecommendations()
       calculateJobLevelRecommendations()
-      if (processPropsAndCheck) {
+      // TODO - need to reconcile the cluster properties passed in with the cluster
+      // properties from the eventlog -
+      if (processPropsAndCheck || appInfoProvider.getClusterInfo.flatMap(_.clusterInfo).isDefined) {
         // update GPU device of platform based on cluster properties if it is not already set.
         // if the GPU device cannot be inferred from cluster properties, do not make any updates.
         if (platform.gpuDevice.isEmpty) {
