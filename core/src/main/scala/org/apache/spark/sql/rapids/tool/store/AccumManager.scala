@@ -32,7 +32,9 @@ class AccumManager {
   }
 
   private def getOrCreateAccumInfo(id: Long, name: Option[String]): AccumInfo = {
-    accumInfoMap.getOrElseUpdate(id, new AccumInfo(AccumMetaRef(id, name)))
+    val newAccumInfo = new AccumInfo(AccumMetaRef(id, name))
+    MemoryManager.write(newAccumInfo)
+    accumInfoMap.getOrElseUpdate(id, newAccumInfo)
   }
 
   def addAccToStage(stageId: Int, accumulableInfo: AccumulableInfo): Unit = {

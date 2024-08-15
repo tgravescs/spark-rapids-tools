@@ -22,6 +22,7 @@ import com.nvidia.spark.rapids.tool.analysis.StatisticsMetrics
 
 import org.apache.spark.scheduler.AccumulableInfo
 import org.apache.spark.sql.rapids.tool.util.EventUtils.parseAccumFieldToLong
+import org.apache.spark.util.kvstore.KVIndex
 
 /**
  * Maintains the accumulator information for a single accumulator
@@ -32,11 +33,14 @@ import org.apache.spark.sql.rapids.tool.util.EventUtils.parseAccumFieldToLong
  * @param infoRef - AccumMetaRef for the accumulator
  */
 class AccumInfo(val infoRef: AccumMetaRef) {
+  @KVIndex
+  val id: Long = infoRef.id
   // TODO: use sorted maps for stageIDs and taskIds?
   val taskUpdatesMap: mutable.HashMap[Long, Long] =
     new mutable.HashMap[Long, Long]()
   val stageValuesMap: mutable.HashMap[Int, Long] =
     new mutable.HashMap[Int, Long]()
+
 
   /**
    * Add accumulable to a stage while:
