@@ -18,11 +18,12 @@ package org.apache.spark.sql.rapids.tool.store
 
 import scala.collection.mutable
 
+import com.fasterxml.jackson.annotation.{JsonIgnore, JsonIgnoreProperties}
 import com.nvidia.spark.rapids.tool.analysis.StatisticsMetrics
 
 import org.apache.spark.scheduler.AccumulableInfo
 import org.apache.spark.sql.rapids.tool.util.EventUtils.parseAccumFieldToLong
-import org.apache.spark.util.kvstore.KVIndex
+import org.apache.spark.status.KVUtils.KVIndexParam
 
 /**
  * Maintains the accumulator information for a single accumulator
@@ -32,12 +33,16 @@ import org.apache.spark.util.kvstore.KVIndex
  * 3. AccumMetaRef for the accumulator - a reference to the Meta information
  * @param infoRef - AccumMetaRef for the accumulator
  */
-class AccumInfo(val infoRef: AccumMetaRef) {
-  @KVIndex
+@JsonIgnoreProperties(ignoreUnknown = true)
+class AccumInfo(val infoRef: AccumMetaRef) extends Serializable {
+
+  @JsonIgnore @KVIndexParam
   val id: Long = infoRef.id
   // TODO: use sorted maps for stageIDs and taskIds?
+//  @JsonProperty("taskUpdatesMap")
   val taskUpdatesMap: mutable.HashMap[Long, Long] =
     new mutable.HashMap[Long, Long]()
+//  @JsonProperty("stageValuesMap")
   val stageValuesMap: mutable.HashMap[Int, Long] =
     new mutable.HashMap[Int, Long]()
 
@@ -97,6 +102,7 @@ class AccumInfo(val infoRef: AccumMetaRef) {
     stageValuesMap.keySet.toSet
   }
 
+  @JsonIgnore
   def getMinStageId: Int = {
     stageValuesMap.keys.min
   }

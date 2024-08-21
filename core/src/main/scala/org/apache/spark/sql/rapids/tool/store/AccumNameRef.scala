@@ -18,15 +18,27 @@ package org.apache.spark.sql.rapids.tool.store
 
 import java.util.concurrent.ConcurrentHashMap
 
+import com.fasterxml.jackson.core.JsonParser
+import com.fasterxml.jackson.databind.{DeserializationContext, JsonDeserializer}
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize
+
 import org.apache.spark.sql.rapids.tool.util.EventUtils.normalizeMetricName
 import org.apache.spark.sql.rapids.tool.util.StringUtils
+
+class AccumNameRefDeserializer extends JsonDeserializer[AccumNameRef] {
+  override def deserialize(jp: JsonParser, ctxt: DeserializationContext): AccumNameRef = {
+    val value = jp.getValueAsString
+    AccumNameRef(value)
+  }
+}
 
 /**
  * Accumulator Name Reference
  * This maintains references to all accumulator names
  * @param value the accumulator name to be stored
  */
-case class AccumNameRef(value: String) {
+@JsonDeserialize(using = classOf[AccumNameRefDeserializer])
+case class AccumNameRef (value: String) {
   // generate and store the CSV formatted name as it is used by multiple rows, and it can be shared
   // by multiple threads.
   // There is a tradeoff between caching this value Vs generating it every time.

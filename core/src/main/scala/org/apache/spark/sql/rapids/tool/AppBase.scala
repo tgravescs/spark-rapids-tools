@@ -86,7 +86,7 @@ abstract class AppBase(
   // A task is added during a TaskEnd eventLog
   lazy val taskManager: TaskModelManager = new TaskModelManager()
 
-//  MemoryManager.initialize()
+  MemoryManager.initialize()
 
   var driverAccumMap: HashMap[Long, ArrayBuffer[DriverAccumCase]] =
     HashMap[Long, ArrayBuffer[DriverAccumCase]]()
