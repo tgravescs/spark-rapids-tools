@@ -36,7 +36,7 @@ class AccumManager {
 
   private def getOrCreateAccumInfo(id: Long, name: Option[String]): AccumInfo = {
     val newAccumInfo = accumInfoMap.getOrElseUpdate(id, new AccumInfo(AccumMetaRef(id, name)))
-    try{
+  /*  try{
       val existingElement = MemoryManager.read(classOf[AccumInfo], id)
       return existingElement
     }
@@ -62,6 +62,8 @@ class AccumManager {
       case e: Exception => println(e.toString)
     }
     println("After writing accumulable")
+
+   */
     newAccumInfo
   }
 

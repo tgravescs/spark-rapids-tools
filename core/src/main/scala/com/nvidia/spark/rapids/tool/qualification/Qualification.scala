@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.tool.qualification
 
-import java.util.concurrent.{ConcurrentLinkedQueue, TimeUnit}
+import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConverters._
 
@@ -28,6 +28,7 @@ import org.apache.hadoop.conf.Configuration
 
 import org.apache.spark.sql.rapids.tool.FailureApp
 import org.apache.spark.sql.rapids.tool.qualification._
+import org.apache.spark.sql.rapids.tool.store.MemoryManager
 import org.apache.spark.sql.rapids.tool.ui.{ConsoleProgressBar, QualificationReportGenerator}
 import org.apache.spark.sql.rapids.tool.util._
 
@@ -41,7 +42,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
 
   override val simpleName: String = "qualTool"
   override val outputDir = s"$outputPath/rapids_4_spark_qualification_output"
-  private val allApps = new ConcurrentLinkedQueue[QualificationSummaryInfo]()
+  // private val allApps = new ConcurrentLinkedQueue[QualificationSummaryInfo]()
 
   override def getNumThreads: Int = nThreads
 
@@ -50,6 +51,8 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
   }
 
   def qualifyApps(allPaths: Seq[EventLogInfo]): Seq[QualificationSummaryInfo] = {
+    MemoryManager.initialize()
+
     if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
       progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
     }
@@ -72,7 +75,11 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
       threadPool.shutdownNow()
     }
     progressBar.foreach(_.finishAll())
-    val allAppsSum = estimateAppFrequency(allApps.asScala.toSeq)
+
+    val allAppsFromView =
+      MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
+
+    val allAppsSum = estimateAppFrequency(allAppsFromView)
     // sort order and limit only applies to the report summary text file,
     // the csv file we write the entire data in descending order
     val sortedDescDetailed = sortDescForDetailedReport(allAppsSum)
@@ -178,7 +185,10 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
             val newClusterSummary = tempSummary.clusterSummary.copy(
               recommendedClusterInfo = pluginTypeChecker.platform.recommendedClusterInfo)
             val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
-            allApps.add(newQualSummary)
+            // store into kvstore as well
+            MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
+            // allApps.add(newQualSummary)
+
             progressBar.foreach(_.reportSuccessfulProcess())
             val endTime = System.currentTimeMillis()
             SuccessAppResult(pathStr, app.appId,

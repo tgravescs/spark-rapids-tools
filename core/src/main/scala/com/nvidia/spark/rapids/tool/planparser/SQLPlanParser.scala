@@ -21,6 +21,7 @@ import scala.collection.mutable.{ArrayBuffer, WeakHashMap}
 import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.nvidia.spark.rapids.tool.qualification.PluginTypeChecker
 
 import org.apache.spark.internal.Logging
@@ -147,6 +148,7 @@ case class ExecInfo(
     if (reason.nonEmpty) UnsupportedReasons.CUSTOM_REASON(reason) else knownReason
   }
 
+  @JsonIgnore
   def getOpAction: OpActions.OpAction = {
     // shouldRemove is checked first because sometimes an exec could have both flag set to true,
     // but then we care about having the "NoPerf" part

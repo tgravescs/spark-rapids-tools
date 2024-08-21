@@ -4,7 +4,7 @@ import java.io.File
 
 import org.apache.spark.SparkConf
 import org.apache.spark.status.KVUtils
-import org.apache.spark.util.kvstore.KVStore
+import org.apache.spark.util.kvstore.{KVStore, KVStoreView}
 
 object MemoryManager {
 
@@ -14,7 +14,7 @@ object MemoryManager {
   def initialize(): Unit = {
     sparkConf.set("spark.history.store.hybridStore.diskBackend", "ROCKSDB")
     val storePath = new File("/tmp/storePath")
-    listing = KVUtils.createKVStore(Option(storePath), live = true, sparkConf)
+    listing = KVUtils.createKVStore(Option(storePath), live = false, sparkConf)
   }
 
   def write[T](obj: T): Unit = {
@@ -23,5 +23,17 @@ object MemoryManager {
 
   def read[T](klass: Class[T], key: Any): T = {
       listing.read(klass, key)
+  }
+
+  def delete[T](klass: Class[T], key: Any): Unit = {
+    listing.delete(klass, key)
+  }
+
+  def view[T](klass: Class[T]): KVStoreView[T] = {
+    listing.view(klass)
+  }
+
+  def viewToSeq[T](klass: Class[T]): Seq[T] = {
+    KVUtils.viewToSeq(view(klass))
   }
 }

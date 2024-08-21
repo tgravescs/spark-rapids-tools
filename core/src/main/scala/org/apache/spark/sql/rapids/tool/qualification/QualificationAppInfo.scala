@@ -19,6 +19,7 @@ package org.apache.spark.sql.rapids.tool.qualification
 import scala.collection.mutable.{ArrayBuffer, HashMap}
 import scala.collection.mutable
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.nvidia.spark.rapids.tool.EventLogInfo
 import com.nvidia.spark.rapids.tool.planparser.{ExecInfo, PlanInfo, SQLPlanParser}
 import com.nvidia.spark.rapids.tool.qualification._
@@ -30,6 +31,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerEvent}
 import org.apache.spark.sql.rapids.tool.{AppBase, AppEventlogProcessException, ClusterSummary, FailureApp, GpuEventLogException, IncorrectAppStatusException, MlOps, MlOpsEventLogType, PhotonEventLogException, SupportedMLFuncsName, ToolUtils}
 import org.apache.spark.sql.rapids.tool.annotation.{Calculated, WallClock}
 import org.apache.spark.sql.rapids.tool.store.StageModel
+import org.apache.spark.util.kvstore.KVIndex
 
 
 class QualificationAppInfo(
@@ -953,6 +955,12 @@ class StageTaskQualificationSummary(
     var totalTaskDuration: Long,
     var totalbytesRead: Long)
 
+
+class QualificationSummaryInfoWrapper(val info: QualificationSummaryInfo) extends Serializable {
+  @JsonIgnore @KVIndex
+  def id: String = info.appId
+}
+
 case class QualificationSummaryInfo(
     appName: String,
     appId: String,
@@ -987,7 +995,7 @@ case class QualificationSummaryInfo(
     mlFunctionsStageDurations: Option[Seq[MLFuncsStageDuration]],
     unsupportedOpsReasons: Map[String, String],
     clusterSummary: ClusterSummary,
-    estimatedFrequency: Option[Long] = None)
+    estimatedFrequency: Option[Long] = None) extends Serializable
 
 case class StageQualSummaryInfo(
     stageId: Int,
