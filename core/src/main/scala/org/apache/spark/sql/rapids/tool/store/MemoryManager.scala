@@ -33,6 +33,8 @@ object MemoryManager {
     listing.view(klass)
   }
 
+  // TODO - presumably pull into memory, maybe just use the iterators and
+  // see if that doesn't cause huge memory increase
   def viewToSeq[T](klass: Class[T]): Seq[T] = {
     KVUtils.viewToSeq(view(klass))
   }
