@@ -21,7 +21,7 @@ import scala.collection.mutable.ArrayBuffer
 import com.nvidia.spark.rapids.tool.ToolTextFileWriter
 
 import org.apache.spark.sql.rapids.tool.profiling.ApplicationInfo
-import org.apache.spark.sql.rapids.tool.store.{AccumInfo, AccumNameRef}
+import org.apache.spark.sql.rapids.tool.store.{AccumInfo, MemoryManager, TaskAccumValueWrapper}
 
 abstract class TimelineTiming(
     val startTime: Long,
@@ -274,22 +274,40 @@ object GenerateTimeline {
       }
     }
 
-    val semMetricsNs = semWaitIds.toList
-      .flatMap(app.accumManager.accumInfoMap.get)
+    val accumIds = semWaitIds.toList.sorted
+    val semAccumsTaskWrappers =
+      AccumInfo.getViewFromSeq(MemoryManager.view(app.appId, classOf[TaskAccumValueWrapper])
+     .index("accumId").first(accumIds.head).last(accumIds.tail))
+        .filter(x => accumIds.contains(x.accumId))
+
+
+    val semMetricsNs = semAccumsTaskWrappers.map(_.accumValue).sum
+      /*
+      semWaitIds.toList.sorted
+      .flatMap(app.accumManager.getAccumInfo)
       .flatMap(_.taskUpdatesMap.values).sum
 
-    val semMetricsMs = app.accumManager.accumInfoMap.flatMap {
-        case (_,accumInfo: AccumInfo)
-            if accumInfo.infoRef.name == AccumNameRef.NAMES_TABLE.get("gpuSemaphoreWait") =>
-            Some(accumInfo.taskUpdatesMap.values.sum)
-        case _ => None
-      }.sum
 
-    val readMetrics = readTimeIds.toList.flatMap(app.accumManager.accumInfoMap.get)
 
-    val opMetrics = opTimeIds.toList.flatMap(app.accumManager.accumInfoMap.get)
+       */
 
-    val writeMetrics = writeTimeIds.toList.flatMap(app.accumManager.accumInfoMap.get)
+    // val readMetrics = readTimeIds.toList.flatMap(app.accumManager.getAccumInfo)
+    val readMetrics =
+      AccumInfo.getViewFromSeq(MemoryManager.view(app.appId, classOf[TaskAccumValueWrapper])
+        .index("accumId"))
+        .filter(x => readTimeIds.contains(x.accumId)).map(_.accumValue)
+
+    // val opMetrics = opTimeIds.toList.flatMap(app.accumManager.getAccumInfo)
+    val opMetrics =
+      AccumInfo.getViewFromSeq(MemoryManager.view(app.appId, classOf[TaskAccumValueWrapper])
+        .index("accumId"))
+        .filter(x => opTimeIds.contains(x.accumId)).map(_.accumValue)
+
+    // val writeMetrics = writeTimeIds.toList.flatMap(app.accumManager.getAccumInfo)
+    val writeMetrics =
+      AccumInfo.getViewFromSeq(MemoryManager.view(app.appId, classOf[TaskAccumValueWrapper])
+        .index("accumId"))
+        .filter(x => writeTimeIds.contains(x.accumId)).map(_.accumValue)
 
     app.taskManager.getAllTasks().foreach { tc =>
       val host = tc.host
@@ -299,11 +317,11 @@ object GenerateTimeline {
       val launchTime = tc.launchTime
       val finishTime = tc.finishTime
       val duration = tc.duration
-      val semTimeMs = ( semMetricsNs / 1000000) + semMetricsMs
-      val readTimeMs = readMetrics.flatMap(_.taskUpdatesMap.get(taskId)).sum / 1000000 +
+      val semTimeMs = ( semMetricsNs / 1000000)
+      val readTimeMs = readMetrics.sum / 1000000 +
         tc.sr_fetchWaitTime
-      val opTimeMs = opMetrics.flatMap(_.taskUpdatesMap.get(taskId)).sum / 1000000
-      val writeTimeMs = writeMetrics.flatMap(_.taskUpdatesMap.get(taskId)).sum / 1000000 +
+      val opTimeMs = opMetrics.sum / 1000000
+      val writeTimeMs = writeMetrics.sum / 1000000 +
         tc.sw_writeTime
       val taskInfo = new TimelineTaskInfo(stageId, taskId, launchTime, finishTime, duration,
         tc.executorDeserializeTime, readTimeMs, semTimeMs, opTimeMs, writeTimeMs)

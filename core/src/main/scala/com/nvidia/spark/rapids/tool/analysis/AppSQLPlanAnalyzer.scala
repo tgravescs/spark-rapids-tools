@@ -27,6 +27,7 @@ import org.apache.spark.sql.execution.ui.{SparkPlanGraph, SparkPlanGraphCluster,
 import org.apache.spark.sql.rapids.tool.{AppBase, RDDCheckHelper, SqlPlanInfoGraphBuffer, SqlPlanInfoGraphEntry}
 import org.apache.spark.sql.rapids.tool.profiling.ApplicationInfo
 import org.apache.spark.sql.rapids.tool.qualification.QualificationAppInfo
+import org.apache.spark.sql.rapids.tool.store.{AccumInfo, MemoryManager, TaskAccumValueWrapper}
 import org.apache.spark.sql.rapids.tool.util.ToolsPlanGraph
 
 /**
@@ -279,32 +280,25 @@ class AppSQLPlanAnalyzer(app: AppBase, appIndex: Int) extends AppAnalysisBase(ap
           }
           val accumValues = filtered.map(_.value).sortWith(_ < _)
           if (accumValues.isEmpty) {
-            None
+            StatisticsMetrics.ZERO_RECORD
           } else if (accumValues.length <= 1) {
-            Some(StatisticsMetrics(0L, 0L, 0L, accumValues.sum))
+            StatisticsMetrics(0L, 0L, 0L, accumValues.sum)
           } else {
-            Some(StatisticsMetrics(accumValues(0), accumValues(accumValues.size / 2),
-              accumValues(accumValues.size - 1), accumValues.sum))
+            StatisticsMetrics(accumValues(0), accumValues(accumValues.size / 2),
+              accumValues(accumValues.size - 1), accumValues.sum)
           }
         case None =>
-          None
+          StatisticsMetrics.ZERO_RECORD
       }
 
-      if (accumTaskStats.isDefined || driverMax.isDefined) {
-        val taskInfo = accumTaskStats.getOrElse(StatisticsMetrics.ZERO_RECORD)
-        val driverInfo = driverMax.getOrElse(StatisticsMetrics.ZERO_RECORD)
+      val max = Math.max(accumTaskStats.max, driverMax.max)
+      val min = Math.max(accumTaskStats.min, driverMax.min)
+      val med = Math.max(accumTaskStats.med, driverMax.med)
+      val total = Math.max(accumTaskStats.total, driverMax.total)
 
-        val max = Math.max(taskInfo.max, driverInfo.max)
-        val min = Math.max(taskInfo.min, driverInfo.min)
-        val med = Math.max(taskInfo.med, driverInfo.med)
-        val total = Math.max(taskInfo.total, driverInfo.total)
-
-        Some(SQLAccumProfileResults(appIndex, metric.sqlID,
-          metric.nodeID, metric.nodeName, metric.accumulatorId, metric.name,
-          min, med, max, total, metric.metricType, metric.stageIds.mkString(",")))
-      } else {
-        None
-      }
+      Some(SQLAccumProfileResults(appIndex, metric.sqlID,
+        metric.nodeID, metric.nodeName, metric.accumulatorId, metric.name,
+        min, med, max, total, metric.metricType, metric.stageIds.mkString(",")))
     }
   }
 
@@ -319,13 +313,17 @@ class AppSQLPlanAnalyzer(app: AppBase, appIndex: Int) extends AppAnalysisBase(ap
    * @return a sequence of AccumProfileResults
    */
   def generateStageLevelAccums(): Seq[AccumProfileResults] = {
-    app.accumManager.accumInfoMap.flatMap { accumMapEntry =>
-      val accumInfo = accumMapEntry._2
-      accumInfo.stageValuesMap.keySet.flatMap( stageId => {
+    app.accumManager.getAccumStagesInfo.flatMap { case (id, stageValuesMap) =>
+      stageValuesMap.keySet.flatMap(stageId => {
         val stageTaskIds = app.taskManager.getAllTasksStageAttempt(stageId).map(_.taskId).toSet
         // get the task updates that belong to that stage
         val taskUpatesSubset =
-          accumInfo.taskUpdatesMap.filterKeys(stageTaskIds.contains).values.toSeq.sorted
+          AccumInfo.getViewFromSeq(MemoryManager.view(app.appId, classOf[TaskAccumValueWrapper])
+            .index("accumId"))
+            .filter(x => stageTaskIds.contains(x.accumId)).map(_.accumValue).toSeq.sorted
+
+       //  val taskUpatesSubset =
+        //   accumInfo.taskUpdatesMap.filterKeys(stageTaskIds.contains).values.toSeq.sorted
         if (taskUpatesSubset.isEmpty) {
           None
         } else {
@@ -341,15 +339,15 @@ class AppSQLPlanAnalyzer(app: AppBase, appIndex: Int) extends AppAnalysisBase(ap
           Some(AccumProfileResults(
             appIndex,
             stageId,
-            accumInfo.infoRef,
+            app.accumManager.accumRefMap.get(id).get, // todo - deal with it not there
             min = min,
             median = median,
             max = max,
             total = sum))
         }
       })
-    }
-  }.toSeq
+    }.toSeq
+  }
 }
 
 object AppSQLPlanAnalyzer {

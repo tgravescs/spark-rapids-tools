@@ -51,40 +51,44 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
   }
 
   def qualifyApps(allPaths: Seq[EventLogInfo]): Seq[QualificationSummaryInfo] = {
-    MemoryManager.initialize()
+    try {
+      MemoryManager.initialize(outputPath)
 
-    if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
-      progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
-    }
-    // generate metadata
-    generateRuntimeReport()
-
-    allPaths.foreach { path =>
-      try {
-        threadPool.submit(new QualifyThread(path))
-      } catch {
-        case e: Exception =>
-          logError(s"Unexpected exception submitting log ${path.eventLog.toString}, skipping!", e)
+      if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
+        progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
       }
-    }
-    // wait for the threads to finish processing the files
-    threadPool.shutdown()
-    if (!threadPool.awaitTermination(waitTimeInSec, TimeUnit.SECONDS)) {
-      logError(s"Processing log files took longer then $waitTimeInSec seconds," +
-        " stopping processing any more event logs")
-      threadPool.shutdownNow()
-    }
-    progressBar.foreach(_.finishAll())
+      // generate metadata
+      generateRuntimeReport()
 
-    val allAppsFromView =
-      MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
+      allPaths.foreach { path =>
+        try {
+          threadPool.submit(new QualifyThread(path))
+        } catch {
+          case e: Exception =>
+            logError(s"Unexpected exception submitting log ${path.eventLog.toString}, skipping!", e)
+        }
+      }
+      // wait for the threads to finish processing the files
+      threadPool.shutdown()
+      if (!threadPool.awaitTermination(waitTimeInSec, TimeUnit.SECONDS)) {
+        logError(s"Processing log files took longer then $waitTimeInSec seconds," +
+          " stopping processing any more event logs")
+        threadPool.shutdownNow()
+      }
+      progressBar.foreach(_.finishAll())
 
-    val allAppsSum = estimateAppFrequency(allAppsFromView)
-    // sort order and limit only applies to the report summary text file,
-    // the csv file we write the entire data in descending order
-    val sortedDescDetailed = sortDescForDetailedReport(allAppsSum)
-    generateQualificationReport(allAppsSum, sortedDescDetailed)
-    sortedDescDetailed
+      val allAppsFromView = MemoryManager.viewToSeq(MemoryManager.APP_SUMMARY,
+          classOf[QualificationSummaryInfoWrapper]).map(_.info)
+
+      val allAppsSum = estimateAppFrequency(allAppsFromView)
+      // sort order and limit only applies to the report summary text file,
+      // the csv file we write the entire data in descending order
+      val sortedDescDetailed = sortDescForDetailedReport(allAppsSum)
+      generateQualificationReport(allAppsSum, sortedDescDetailed)
+      sortedDescDetailed
+    } finally {
+      //MemoryManager.deleteDB()
+    }
   }
 
   private def sortDescForDetailedReport(
@@ -186,7 +190,8 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
               recommendedClusterInfo = pluginTypeChecker.platform.recommendedClusterInfo)
             val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
             // store into kvstore as well
-            MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
+            MemoryManager.write(newQualSummary.appId,
+              new QualificationSummaryInfoWrapper(newQualSummary))
             // allApps.add(newQualSummary)
 
             progressBar.foreach(_.reportSuccessfulProcess())
