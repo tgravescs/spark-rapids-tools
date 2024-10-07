@@ -79,7 +79,7 @@ abstract class AppBase(
   var sqlPlanMetricsAdaptive: ArrayBuffer[SQLPlanMetricsCase] = ArrayBuffer[SQLPlanMetricsCase]()
 
   // accum id to task stage accum info
-  lazy val accumManager: AccumManager = new AccumManager(appId)
+  lazy val accumManager: AccumManager = new AccumManager()
 
   lazy val stageManager: StageModelManager = new StageModelManager()
   // Container that manages TaskIno including SparkMetrics.

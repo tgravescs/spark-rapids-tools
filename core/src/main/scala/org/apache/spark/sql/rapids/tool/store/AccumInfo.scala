@@ -16,24 +16,14 @@
 
 package org.apache.spark.sql.rapids.tool.store
 
-import com.fasterxml.jackson.annotation.JsonIgnore
+import scala.collection.mutable
 
-import org.apache.spark.status.KVUtils
-import org.apache.spark.util.kvstore.{KVIndex, KVStoreView}
+import com.fasterxml.jackson.annotation.{JsonIgnore, JsonIgnoreProperties}
+import com.nvidia.spark.rapids.tool.analysis.StatisticsMetrics
 
-class TaskAccumValueWrapper(
-    @KVIndex val accumId: Long,
-    val stageId: Int,
-    val taskId: Long,
-    val accumValue: Long) {
-
-  // TODO - add stage attempt id
-  @JsonIgnore @KVIndex
-  def id: Array[Long] = Array(accumId, stageId, taskId)
-}
-
-
-/*
+import org.apache.spark.scheduler.AccumulableInfo
+import org.apache.spark.sql.rapids.tool.util.EventUtils.parseAccumFieldToLong
+import org.apache.spark.status.KVUtils.KVIndexParam
 
 /**
  * Maintains the accumulator information for a single accumulator
@@ -44,16 +34,15 @@ class TaskAccumValueWrapper(
  * @param infoRef - AccumMetaRef for the accumulator
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-class AccumInfo(val infoRef: AccumMetaRef, val appId: String) extends Serializable with Logging {
+class AccumInfo(val infoRef: AccumMetaRef) extends Serializable {
 
-  @KVIndexParam
+  @JsonIgnore @KVIndexParam
   val id: Long = infoRef.id
   // TODO: use sorted maps for stageIDs and taskIds?
 //  @JsonProperty("taskUpdatesMap")
-  //val taskUpdatesMap: mutable.HashMap[Long, Long] =
-   // new mutable.HashMap[Long, Long]()
+  val taskUpdatesMap: mutable.HashMap[Long, Long] =
+    new mutable.HashMap[Long, Long]()
 //  @JsonProperty("stageValuesMap")
-  @JsonDeserialize(contentAs=classOf[mutable.HashMap[Int, Long]])
   val stageValuesMap: mutable.HashMap[Int, Long] =
     new mutable.HashMap[Int, Long]()
 
@@ -70,7 +59,6 @@ class AccumInfo(val infoRef: AccumMetaRef, val appId: String) extends Serializab
    *               triggered by a taskEnd event and the map between stage-Acc has not been
    *               established yet.
    */
-  @JsonIgnore
   def addAccumToStage(stageId: Int,
       accumulableInfo: AccumulableInfo,
       update: Option[Long] = None): Unit = {
@@ -92,30 +80,24 @@ class AccumInfo(val infoRef: AccumMetaRef, val appId: String) extends Serializab
    * @param taskId the taskId pulled from the TaskEnd event
    * @param accumulableInfo the accumulableInfo from the TaskEnd event
    */
-  @JsonIgnore
   def addAccumToTask(stageId: Int, taskId: Long, accumulableInfo: AccumulableInfo): Unit = {
-    // update is the task value, value is the total accum for all tasks
     val parsedUpdateValue = accumulableInfo.update.flatMap(parseAccumFieldToLong)
     // we need to update the stageMap if the stageId does not exist in the map
     val updateStageFlag = !stageValuesMap.contains(stageId)
     // This is for cases where same task updates the same accum multiple times
-    val taskValueWrapper = new TaskAccumValueWrapper(accumulableInfo.id,
-      stageId, taskId, parsedUpdateValue.getOrElse(0L))
-    MemoryManager.write(appId, taskValueWrapper)
-    /*val existingUpdateValue = taskUpdatesMap.getOrElse(taskId, 0L)
+    val existingUpdateValue = taskUpdatesMap.getOrElse(taskId, 0L)
     parsedUpdateValue match {
       case Some(v) =>
         taskUpdatesMap.put(taskId, v + existingUpdateValue)
       case None =>
         taskUpdatesMap.put(taskId, existingUpdateValue)
-    } */
+    }
     // update the stage value map if necessary
     if (updateStageFlag) {
       addAccumToStage(stageId, accumulableInfo, parsedUpdateValue)
     }
   }
 
-  @JsonIgnore
   def getStageIds: Set[Int] = {
     stageValuesMap.keySet.toSet
   }
@@ -125,13 +107,8 @@ class AccumInfo(val infoRef: AccumMetaRef, val appId: String) extends Serializab
     stageValuesMap.keys.min
   }
 
-  @JsonIgnore
   def calculateAccStats(): StatisticsMetrics = {
-    val sortedTaskUpdates = KVUtils.viewToSeq(
-      MemoryManager.view(appId, classOf[TaskAccumValueWrapper]).index("accumId").first(id).last(id))
-      .map(_.accumValue).sorted
-
-    // val sortedTaskUpdates = taskUpdatesMap.values.toSeq.sorted
+    val sortedTaskUpdates = taskUpdatesMap.values.toSeq.sorted
     if (sortedTaskUpdates.isEmpty) {
       // do not check stage values because the stats is only meant for task updates
       StatisticsMetrics.ZERO_RECORD
@@ -148,34 +125,12 @@ class AccumInfo(val infoRef: AccumMetaRef, val appId: String) extends Serializab
       StatisticsMetrics(min, median, max, sum)
     }
   }
-  @JsonIgnore
+
   def getMaxStageValue: Option[Long] = {
     if (stageValuesMap.values.isEmpty) {
       None
     } else {
-      logWarning("stge max value contains: " + stageValuesMap.values.mkString(","))
-      logWarning("stge max value contains: " + stageValuesMap.values.head.getClass)
-      logWarning("stge keys contains: " + stageValuesMap.keys.mkString(","))
-      logWarning("stge keys contains: " + stageValuesMap.keys.head.getClass)
-
-      /*stageValuesMap.foreach { case (k, v) =>
-        logWarning(s"key is : $k value is $v value instance ${v.getClass}")
-      }*/
-      val foo = stageValuesMap.values
-      foo.foreach { x =>
-        logWarning("x class " + x.getClass)
-      }
-      logWarning("max is " + foo + " instance: " + foo.getClass)
       Some(stageValuesMap.values.max)
     }
   }
 }
-
- */
-
-object AccumInfo {
-  def getViewFromSeq[T](view: KVStoreView[T]): Seq[T] = {
-    KVUtils.viewToSeq(view)
-  }
-}
-
