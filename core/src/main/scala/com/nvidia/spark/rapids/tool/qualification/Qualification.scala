@@ -29,7 +29,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.rapids.tool.FailureApp
 import org.apache.spark.sql.rapids.tool.qualification._
 import org.apache.spark.sql.rapids.tool.store.MemoryManager
-import org.apache.spark.sql.rapids.tool.ui.{ConsoleProgressBar, QualificationReportGenerator}
+import org.apache.spark.sql.rapids.tool.ui.ConsoleProgressBar
 import org.apache.spark.sql.rapids.tool.util._
 
 class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
@@ -192,14 +192,26 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
             AppSubscriber.withSafeValidAttempt(app.appId, app.attemptId) { () =>
               val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
               // check if the app is already in the map
-              if (allApps.containsKey(app.appId)) {
+              // TODO - need to handle multiple apps in DB
+              try {
+                MemoryManager.read(classOf[QualificationSummaryInfoWrapper], app.appId)
+                MemoryManager.delete(classOf[QualificationSummaryInfoWrapper], app.appId)
+                logInfo(s"Removed older app summary for app: ${app.appId} " +
+                  s"before adding the new one with attempt: ${app.attemptId}")
+                progressBar.foreach(_.adjustCounterForMultipleAttempts())
+              } catch {
+                case _: NoSuchElementException =>
+                  // no other app attempt just go on
+              }
+             /* if (allApps.containsKey(app.appId)) {
                 // fix the progress bar counts
                 progressBar.foreach(_.adjustCounterForMultipleAttempts())
                 logInfo(s"Removing older app summary for app: ${app.appId} " +
                   s"before adding the new one with attempt: ${app.attemptId}")
               }
+
+              */
               progressBar.foreach(_.reportSuccessfulProcess())
-              // TODO - need to include appId?
               MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
               //allApps.put(app.appId, newQualSummary)
               val endTime = System.currentTimeMillis()
