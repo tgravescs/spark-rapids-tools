@@ -19,12 +19,15 @@ package org.apache.spark.sql.rapids.tool
 import java.io.InputStream
 import java.util.zip.GZIPInputStream
 
-import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, LinkedHashSet, Map, SortedMap}
+import scala.collection.immutable
+import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, LinkedHashSet, Map}
 
+import com.nvidia.spark.rapids.SparkRapidsBuildInfoEvent
 import com.nvidia.spark.rapids.tool.{DatabricksEventLog, DatabricksRollingEventLogFilesFileReader, EventLogInfo}
 import com.nvidia.spark.rapids.tool.planparser.{HiveParseHelper, ReadParser}
 import com.nvidia.spark.rapids.tool.planparser.HiveParseHelper.isHiveTableScanNode
-import com.nvidia.spark.rapids.tool.profiling.{BlockManagerRemovedCase, DataSourceCase, DriverAccumCase, JobInfoClass, ResourceProfileInfoCase, SQLExecutionInfoClass, SQLPlanMetricsCase}
+import com.nvidia.spark.rapids.tool.profiling.{BlockManagerRemovedCase, DriverAccumCase, JobInfoClass, ResourceProfileInfoCase, SQLExecutionInfoClass, SQLPlanMetricsCase}
+import com.nvidia.spark.rapids.tool.qualification.AppSubscriber
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 
@@ -33,7 +36,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler.{SparkListenerEvent, StageInfo}
 import org.apache.spark.sql.execution.SparkPlanInfo
 import org.apache.spark.sql.execution.ui.SparkPlanGraphNode
-import org.apache.spark.sql.rapids.tool.store.{AccumManager, StageModel, StageModelManager, TaskModelManager}
+import org.apache.spark.sql.rapids.tool.store.{AccumManager, DataSourceRecord, SQLPlanModelManager, StageModel, StageModelManager, TaskModelManager}
 import org.apache.spark.sql.rapids.tool.util.{EventUtils, RapidsToolsConfUtil, ToolsPlanGraph, UTF8Source}
 import org.apache.spark.util.Utils
 
@@ -51,6 +54,8 @@ abstract class AppBase(
     }
   }
 
+  lazy val attemptId: Int = appMetaData.map(_.attemptId).getOrElse(1)
+
   // Store map of executorId to executor info
   val executorIdToInfo = new HashMap[String, ExecutorInfoClass]()
   // resourceProfile id to resource profile info
@@ -58,11 +63,13 @@ abstract class AppBase(
   var blockManagersRemoved: ArrayBuffer[BlockManagerRemovedCase] =
     ArrayBuffer[BlockManagerRemovedCase]()
   // The data source information
-  val dataSourceInfo: ArrayBuffer[DataSourceCase] = ArrayBuffer[DataSourceCase]()
+  val dataSourceInfo: ArrayBuffer[DataSourceRecord] = ArrayBuffer[DataSourceRecord]()
 
   // jobId to job info
   val jobIdToInfo = new HashMap[Int, JobInfoClass]()
   val jobIdToSqlID: HashMap[Int, Long] = HashMap.empty[Int, Long]
+
+  lazy val sqlManager = new SQLPlanModelManager()
 
   // SQL containing any Dataset operation or RDD to DataSet/DataFrame operation
   val sqlIDToDataSetOrRDDCase: HashSet[Long] = HashSet[Long]()
@@ -73,9 +80,6 @@ abstract class AppBase(
   // sqlId to sql info
   val sqlIdToInfo = new HashMap[Long, SQLExecutionInfoClass]()
   val sqlIdToStages = new HashMap[Long, ArrayBuffer[Int]]()
-  // sqlPlans stores HashMap (sqlID <-> SparkPlanInfo)
-  // SortedMap is used to keep the order of the sqlPlans since AQEs can overrides the existing ones
-  var sqlPlans: Map[Long, SparkPlanInfo] = SortedMap[Long, SparkPlanInfo]()
   var sqlPlanMetricsAdaptive: ArrayBuffer[SQLPlanMetricsCase] = ArrayBuffer[SQLPlanMetricsCase]()
 
   // accum id to task stage accum info
@@ -89,6 +93,11 @@ abstract class AppBase(
 
   var driverAccumMap: HashMap[Long, ArrayBuffer[DriverAccumCase]] =
     HashMap[Long, ArrayBuffer[DriverAccumCase]]()
+
+  var sparkRapidsBuildInfo: SparkRapidsBuildInfoEvent = SparkRapidsBuildInfoEvent(immutable.Map(),
+    immutable.Map(), immutable.Map(), immutable.Map())
+
+  def sqlPlans: immutable.Map[Long, SparkPlanInfo] = sqlManager.getPlanInfos
 
   // Returns the String value of the eventlog or empty if it is not defined. Note that the eventlog
   // won't be defined for running applications
@@ -159,6 +168,31 @@ abstract class AppBase(
     }
   }
 
+  /**
+   * Calculates total core seconds which is the sum over executor core seconds. Executor
+   * core seconds is computed as executor duration (s) multiplied by num of cores.
+   */
+  def calculateTotalCoreSec(): Long = {
+    var totalCoreSec: Double = 0
+    executorIdToInfo.foreach { case(_, eInfo) =>
+      val eStartTime = eInfo.addTime
+      var eEndTime = eInfo.removeTime
+      if (eEndTime == 0L) {
+        getAppEndTime match {
+          case Some(appEndTime) =>
+            eEndTime = appEndTime
+          case None =>
+            logInfo("Unable to find either executor or app end time: " +
+              "setting executor duration to 0")
+            eEndTime = eStartTime
+        }
+      }
+      totalCoreSec += (eEndTime - eStartTime).toDouble / 1000 * eInfo.totalCores
+    }
+    // round up for edge case when total core seconds is in range [0, 1)
+    math.ceil(totalCoreSec).toLong
+  }
+
   def getOrCreateExecutor(executorId: String, addTime: Long): ExecutorInfoClass = {
     executorIdToInfo.getOrElseUpdate(executorId, {
       new ExecutorInfoClass(executorId, addTime)
@@ -193,7 +227,7 @@ abstract class AppBase(
     sqlIDToDataSetOrRDDCase.remove(sqlID)
     sqlIDtoProblematic.remove(sqlID)
     sqlIdToInfo.remove(sqlID)
-    sqlPlans.remove(sqlID)
+    sqlManager.remove(sqlID)
     val dsToRemove = dataSourceInfo.filter(_.sqlID == sqlID)
     dsToRemove.foreach(dataSourceInfo -= _)
 
@@ -304,11 +338,11 @@ abstract class AppBase(
 
   // The ReadSchema metadata is only in the eventlog for DataSource V1 readers
   def checkMetadataForReadSchema(
-      sqlPlanInfoGraph: SqlPlanInfoGraphEntry): ArrayBuffer[DataSourceCase] = {
+      sqlPlanInfoGraph: SqlPlanInfoGraphEntry): ArrayBuffer[DataSourceRecord] = {
     // check if planInfo has ReadSchema
     val allMetaWithSchema = AppBase.getPlanMetaWithSchema(sqlPlanInfoGraph.planInfo)
     val allNodes = sqlPlanInfoGraph.sparkPlanGraph.allNodes
-    val results = ArrayBuffer[DataSourceCase]()
+    val results = ArrayBuffer[DataSourceRecord]()
 
     allMetaWithSchema.foreach { plan =>
       val meta = plan.metadata
@@ -323,13 +357,16 @@ abstract class AppBase(
       // add it to the dataSourceInfo
       // Processing Photon eventlogs issue: https://github.com/NVIDIA/spark-rapids-tools/issues/251
       if (scanNode.nonEmpty) {
-        results += DataSourceCase(
+        results += DataSourceRecord(
           sqlPlanInfoGraph.sqlID,
+          sqlManager.getPlanById(sqlPlanInfoGraph.sqlID).get.plan.version,
           scanNode.head.id,
-          meta.getOrElse("Format", "unknown"),
-          meta.getOrElse("Location", "unknown"),
-          meta.getOrElse("PushedFilters", "unknown"),
-          readSchema
+          ReadParser.extractTagFromV1ReadMeta("Format", meta),
+          ReadParser.extractTagFromV1ReadMeta("Location", meta),
+          ReadParser.extractTagFromV1ReadMeta(ReadParser.METAFIELD_TAG_PUSHED_FILTERS, meta),
+          readSchema,
+          ReadParser.extractTagFromV1ReadMeta(ReadParser.METAFIELD_TAG_DATA_FILTERS, meta),
+          ReadParser.extractTagFromV1ReadMeta(ReadParser.METAFIELD_TAG_PARTITION_FILTERS, meta)
         )
       }
     }
@@ -341,13 +378,16 @@ abstract class AppBase(
         val sqlGraph = ToolsPlanGraph(hiveReadPlan)
         val hiveScanNode = sqlGraph.allNodes.head
         val scanHiveMeta = HiveParseHelper.parseReadNode(hiveScanNode)
-        results += DataSourceCase(
+        results += DataSourceRecord(
           sqlPlanInfoGraph.sqlID,
+          sqlManager.getPlanById(sqlPlanInfoGraph.sqlID).get.plan.version,
           hiveScanNode.id,
           scanHiveMeta.format,
           scanHiveMeta.location,
-          scanHiveMeta.filters,
-          scanHiveMeta.schema
+          scanHiveMeta.pushedFilters,
+          scanHiveMeta.schema,
+          scanHiveMeta.dataFilters,
+          scanHiveMeta.partitionFilters
         )
       }
     }
@@ -358,16 +398,19 @@ abstract class AppBase(
   // This will find scans for DataSource V2, if the schema is very large it
   // will likely be incomplete and have ... at the end.
   def checkGraphNodeForReads(
-      sqlID: Long, node: SparkPlanGraphNode): Option[DataSourceCase] = {
+      sqlID: Long, node: SparkPlanGraphNode): Option[DataSourceRecord] = {
     if (ReadParser.isDataSourceV2Node(node)) {
       val res = ReadParser.parseReadNode(node)
-      val dsCase = DataSourceCase(
+      val dsCase = DataSourceRecord(
         sqlID,
+        sqlManager.getPlanById(sqlID).get.plan.version,
         node.id,
         res.format,
         res.location,
-        res.filters,
-        res.schema)
+        res.pushedFilters,
+        res.schema,
+        res.dataFilters,
+        res.partitionFilters)
       dataSourceInfo += dsCase
       Some(dsCase)
     } else {
@@ -392,7 +435,20 @@ abstract class AppBase(
     probNotDataset.values.flatten.toSet.toSeq
   }
 
+  /**
+   * Registers the attempt ID for the application and updates the tracker map if the attemptId is
+   * greater than the existing attemptId.
+   */
+  def registerAttemptId(): Unit = {
+    if (isAppMetaDefined) {
+      val currentAttemptId = sparkProperties.getOrElse("spark.app.attempt.id", "1").toInt
+      appMetaData.foreach(_.setAttemptId(currentAttemptId))
+      AppSubscriber.subscribeAppAttempt(appId, currentAttemptId)
+    }
+  }
+
   protected def postCompletion(): Unit = {
+    registerAttemptId()
     calculateAppDuration()
   }
 
@@ -496,7 +552,7 @@ object AppBase {
     (complexTypes.filter(_.nonEmpty), nestedComplexTypes.filter(_.nonEmpty))
   }
 
-  private def trimSchema(str: String): String = {
+  def trimSchema(str: String): String = {
     val index = str.lastIndexOf(",")
     if (index != -1 && str.contains("...")) {
       str.substring(0, index)

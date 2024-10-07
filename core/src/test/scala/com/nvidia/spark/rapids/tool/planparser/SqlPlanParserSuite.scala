@@ -33,7 +33,7 @@ import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.rapids.tool.ToolUtils
 import org.apache.spark.sql.rapids.tool.qualification.QualificationAppInfo
-import org.apache.spark.sql.rapids.tool.util.{RapidsToolsConfUtil, ToolsPlanGraph, UTF8Source}
+import org.apache.spark.sql.rapids.tool.util.{FSUtils, RapidsToolsConfUtil, ToolsPlanGraph, UTF8Source}
 
 class SQLPlanParserSuite extends BaseTestSuite {
 
@@ -1830,6 +1830,61 @@ class SQLPlanParserSuite extends BaseTestSuite {
         "CheckOverflowInTableInsert should exist in the logical plan.")
       assert(!overflowExprInPhysicalPlan,
         "CheckOverflowInTableInsert should not exist in the physical plan.")
+    }
+  }
+
+  test("MinBy and MaxBy are supported") {
+    // Test that aggregates minBy and MAxBy are marked as supported by the qualification tool.
+    TrampolineUtil.withTempDir { eventLogDir =>
+      val (eventLog, _) = ToolTestUtils.generateEventLog(eventLogDir, "minMaxBy") { spark =>
+        import spark.implicits._
+        val testData = Seq((1, 2, 3), (1, 4, 6), (2, 3, 4)).toDF("a", "b", "c")
+        testData.createOrReplaceTempView("t1")
+        spark.sql("SELECT a, min_by(b, c), max_by(b, c) FROM t1 GROUP BY a")
+      }
+      // validate that the eventlog contains MinBy and MaxBy
+      val reader = FSUtils.readFileContentAsUTF8(eventLog)
+      assert(reader.contains("min_by"))
+      assert(reader.contains("max_by"))
+      // run the qualification tool
+      val pluginTypeChecker = new PluginTypeChecker()
+      val app = createAppFromEventlog(eventLog)
+      val parsedPlans = app.sqlPlans.map { case (sqlID, plan) =>
+        SQLPlanParser.parseSQLPlan(app.appId, plan, sqlID, "", pluginTypeChecker, app)
+      }
+      // we should have 2 hash aggregates with min_by and max_by expressions
+      // if the min_by and max_by were not recognized, the test would fail
+      val hashAggExecs =
+        getAllExecsFromPlan(parsedPlans.toSeq).filter(_.exec.equals("HashAggregate"))
+      assertSizeAndSupported(2, hashAggExecs)
+    }
+  }
+
+  test("array_join is supported") {
+    TrampolineUtil.withTempDir { outputLoc =>
+      TrampolineUtil.withTempDir { eventLogDir =>
+        val (eventLog, _) = ToolTestUtils.generateEventLog(eventLogDir, "arrayjoin") { spark =>
+          import spark.implicits._
+          val df = Seq(
+            (List("a", "b", "c"), List("b", "c")),
+            (List("a", "a"), List("b", "c")),
+            (List("aa"), List("b", "c"))
+          ).toDF("x", "y")
+          df.write.parquet(s"$outputLoc/test_arrayjoin")
+          val df2 = spark.read.parquet(s"$outputLoc/test_arrayjoin")
+          val df3 = df2.withColumn("arr_join", array_join(col("x"), "."))
+          df3
+        }
+        val app = createAppFromEventlog(eventLog)
+        assert(app.sqlPlans.size == 2)
+        val pluginTypeChecker = new PluginTypeChecker()
+        val parsedPlans = app.sqlPlans.map { case (sqlID, plan) =>
+          SQLPlanParser.parseSQLPlan(app.appId, plan, sqlID, "", pluginTypeChecker, app)
+        }
+        val allExecInfo = getAllExecsFromPlan(parsedPlans.toSeq)
+        val projectExecs = allExecInfo.filter(_.exec == "Project")
+        assertSizeAndSupported(1, projectExecs)
+      }
     }
   }
 }

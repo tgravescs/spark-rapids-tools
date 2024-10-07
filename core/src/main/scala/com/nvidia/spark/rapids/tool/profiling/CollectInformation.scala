@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids.tool.profiling
 
 import scala.collection.mutable.{ArrayBuffer, HashMap}
 
+import com.nvidia.spark.rapids.SparkRapidsBuildInfoEvent
 import com.nvidia.spark.rapids.tool.ToolTextFileWriter
 import com.nvidia.spark.rapids.tool.views._
 
@@ -103,6 +104,10 @@ class CollectInformation(apps: Seq[ApplicationInfo]) extends Logging {
   def getSQLCleanAndAligned: Seq[SQLCleanAndAlignIdsProfileResult] = {
     ProfSQLPlanAlignedView.getRawView(apps)
   }
+
+  def getSparkRapidsInfo: Seq[SparkRapidsBuildInfoEvent] = {
+    apps.map(_.sparkRapidsBuildInfo)
+  }
 }
 
 object CollectInformation extends Logging {
@@ -124,7 +129,7 @@ object CollectInformation extends Logging {
       val planFileWriter = new ToolTextFileWriter(s"$outputDir/${app.appId}",
         "planDescriptions.log", "SQL Plan")
       try {
-        for ((sqlID, planDesc) <- app.physicalPlanDescription.toSeq.sortBy(_._1)) {
+        for ((sqlID, planDesc) <- app.sqlManager.getPhysicalPlans) {
           planFileWriter.write("\n=============================\n")
           planFileWriter.write(s"Plan for SQL ID : $sqlID")
           planFileWriter.write("\n=============================\n")

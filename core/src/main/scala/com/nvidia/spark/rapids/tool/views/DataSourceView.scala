@@ -38,6 +38,8 @@ object IoMetrics {
   val SCAN_TIME_LABEL = "scan time"
   val DATA_SIZE_LABEL = "size of files read"
   val DECODE_TIME_LABEL = "GPU decode time"
+
+  val EMPTY_IO_METRICS: IoMetrics = IoMetrics(0, 0, 0, 0)
 }
 
 trait AppDataSourceViewTrait extends ViewableTrait[DataSourceProfileResult] {
@@ -102,23 +104,31 @@ trait AppDataSourceViewTrait extends ViewableTrait[DataSourceProfileResult] {
         || sqlAccum.name.contains(IoMetrics.DECODE_TIME_LABEL)
         || sqlAccum.name.equals(IoMetrics.DATA_SIZE_LABEL))
 
-    app.dataSourceInfo.map { ds =>
+    val dsFromLastPlan = app.dataSourceInfo.map { ds =>
       val sqlIdtoDs = dataSourceMetrics.filter(
         sqlAccum => sqlAccum.sqlID == ds.sqlID && sqlAccum.nodeID == ds.nodeId)
-      if (sqlIdtoDs.nonEmpty) {
-        val ioMetrics = getIoMetrics(sqlIdtoDs)
-        DataSourceProfileResult(index, ds.sqlID, ds.nodeId,
-          ds.format, ioMetrics.bufferTime, ioMetrics.scanTime, ioMetrics.dataSize,
-          ioMetrics.decodeTime, ds.location, ds.pushedFilters, ds.schema)
+      val ioMetrics = if (sqlIdtoDs.nonEmpty) {
+        getIoMetrics(sqlIdtoDs)
       } else {
-        DataSourceProfileResult(index, ds.sqlID, ds.nodeId,
-          ds.format, 0, 0, 0, 0, ds.location, ds.pushedFilters, ds.schema)
+        IoMetrics.EMPTY_IO_METRICS
       }
+      DataSourceProfileResult(index, ds.sqlID, ds.version, ds.nodeId,
+        ds.format, ioMetrics.bufferTime, ioMetrics.scanTime, ioMetrics.dataSize,
+        ioMetrics.decodeTime, ds.location, ds.pushedFilters, ds.schema, ds.dataFilters,
+        ds.partitionFilters, ds.isFromFinalPlan)
     }
+    val dsFromOrigPlans = app.sqlManager.getDataSourcesFromOrigPlans.map { ds =>
+      DataSourceProfileResult(index, ds.sqlID, ds.version, ds.nodeId, ds.format,
+        IoMetrics.EMPTY_IO_METRICS.bufferTime, IoMetrics.EMPTY_IO_METRICS.scanTime,
+        IoMetrics.EMPTY_IO_METRICS.dataSize, IoMetrics.EMPTY_IO_METRICS.decodeTime,
+        ds.location, ds.pushedFilters, ds.schema, ds.dataFilters, ds.partitionFilters,
+        ds.isFromFinalPlan)
+    }
+    dsFromLastPlan ++ dsFromOrigPlans
   }
 
   override def sortView(rows: Seq[DataSourceProfileResult]): Seq[DataSourceProfileResult] = {
-    rows.sortBy(cols => (cols.appIndex, cols.sqlID, cols.location, cols.schema))
+    rows.sortBy(cols => (cols.appIndex, cols.sqlID, cols.version, cols.location, cols.schema))
   }
 }
 

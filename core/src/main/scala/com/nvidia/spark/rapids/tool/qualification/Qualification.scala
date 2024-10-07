@@ -35,14 +35,14 @@ import org.apache.spark.sql.rapids.tool.util._
 class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
     timeout: Option[Long], nThreads: Int, order: String,
     pluginTypeChecker: PluginTypeChecker, reportReadSchema: Boolean,
-    printStdout: Boolean, uiEnabled: Boolean, enablePB: Boolean,
+    printStdout: Boolean, enablePB: Boolean,
     reportSqlLevel: Boolean, maxSQLDescLength: Int, mlOpsEnabled:Boolean,
     penalizeTransitions: Boolean, tunerContext: Option[TunerContext],
     clusterReport: Boolean) extends ToolBase(timeout) {
 
   override val simpleName: String = "qualTool"
   override val outputDir = s"$outputPath/rapids_4_spark_qualification_output"
-  // private val allApps = new ConcurrentLinkedQueue[QualificationSummaryInfo]()
+  // private val allApps = new ConcurrentHashMap[String, QualificationSummaryInfo]()
 
   override def getNumThreads: Int = nThreads
 
@@ -75,7 +75,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
       threadPool.shutdownNow()
     }
     progressBar.foreach(_.finishAll())
-
+    // TODO - changed ot map with app id - need to handle
     val allAppsFromView =
       MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
 
@@ -169,30 +169,50 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
           // this is a bit ugly right now to overload writing out the report and returning the
           // DataSource information but this encapsulates the analyzer to keep the memory usage
           // smaller.
-          val dsInfo = QualRawReportGenerator.generateRawMetricQualViewAndGetDataSourceInfo(
-            outputDir, app, appIndex)
+          val dsInfo =
+            AppSubscriber.withSafeValidAttempt(app.appId, app.attemptId) { () =>
+              QualRawReportGenerator.generateRawMetricQualViewAndGetDataSourceInfo(
+                outputDir, app, appIndex)
+            }.getOrElse(Seq.empty)
           val qualSumInfo = app.aggregateStats()
-          tunerContext.foreach { tuner =>
-            // Run the autotuner if it is enabled.
-            // Note that we call the autotuner anyway without checking the aggregate results
-            // because the Autotuner can still make some recommendations based on the information
-            // enclosed by the QualificationInfo object
-            tuner.tuneApplication(app, qualSumInfo, appIndex, dsInfo)
+          AppSubscriber.withSafeValidAttempt(app.appId, app.attemptId) { () =>
+            tunerContext.foreach { tuner =>
+              // Run the autotuner if it is enabled.
+              // Note that we call the autotuner anyway without checking the aggregate results
+              // because the Autotuner can still make some recommendations based on the information
+              // enclosed by the QualificationInfo object
+              tuner.tuneApplication(app, qualSumInfo, appIndex, dsInfo)
+            }
           }
           if (qualSumInfo.isDefined) {
             // add the recommend cluster info into the summary
             val tempSummary = qualSumInfo.get
             val newClusterSummary = tempSummary.clusterSummary.copy(
               recommendedClusterInfo = pluginTypeChecker.platform.recommendedClusterInfo)
-            val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
-            // store into kvstore as well
-            MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
-            // allApps.add(newQualSummary)
-
-            progressBar.foreach(_.reportSuccessfulProcess())
-            val endTime = System.currentTimeMillis()
-            SuccessAppResult(pathStr, app.appId,
-              s"Took ${endTime - startTime}ms to process")
+            AppSubscriber.withSafeValidAttempt(app.appId, app.attemptId) { () =>
+              val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
+              // check if the app is already in the map
+              if (allApps.containsKey(app.appId)) {
+                // fix the progress bar counts
+                progressBar.foreach(_.adjustCounterForMultipleAttempts())
+                logInfo(s"Removing older app summary for app: ${app.appId} " +
+                  s"before adding the new one with attempt: ${app.attemptId}")
+              }
+              progressBar.foreach(_.reportSuccessfulProcess())
+              // TODO - need to include appId?
+              MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
+              //allApps.put(app.appId, newQualSummary)
+              val endTime = System.currentTimeMillis()
+              SuccessAppResult(pathStr, app.appId, app.attemptId,
+                s"Took ${endTime - startTime}ms to process")
+            } match {
+              case Some(successfulResult) => successfulResult
+              case _ =>
+                // If the attemptId is an older attemptId, skip this attempt.
+                // This can happen when the user has provided event logs for multiple attempts
+                progressBar.foreach(_.reportSkippedProcess())
+                SkippedAppResult.fromAppAttempt(pathStr, app.appId, app.attemptId)
+            }
           } else {
             progressBar.foreach(_.reportUnkownStatusProcess())
             UnknownAppResult(pathStr, app.appId,
@@ -254,9 +274,6 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
       } else {
         logWarning(s"Eventlogs doesn't contain any ML functions")
       }
-    }
-    if (uiEnabled) {
-      QualificationReportGenerator.generateDashBoard(outputDir, allAppsSum)
     }
     if (clusterReport) {
       qWriter.writeClusterReport(allAppsSum)

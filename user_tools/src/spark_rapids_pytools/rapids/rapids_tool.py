@@ -25,19 +25,21 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
 import spark_rapids_pytools
+from spark_rapids_pytools import get_spark_dep_version
 from spark_rapids_pytools.cloud_api.sp_types import get_platform, \
     ClusterBase, DeployMode, NodeHWInfo
-from spark_rapids_pytools.common.prop_manager import YAMLPropertiesContainer
+from spark_rapids_pytools.common.prop_manager import YAMLPropertiesContainer, AbstractPropertiesContainer
 from spark_rapids_pytools.common.sys_storage import FSUtil, FileVerifier
 from spark_rapids_pytools.common.utilities import ToolLogging, Utils, ToolsSpinner
 from spark_rapids_pytools.rapids.rapids_job import RapidsJobPropContainer
 from spark_rapids_pytools.rapids.tool_ctxt import ToolContext
 from spark_rapids_tools import CspEnv
+from spark_rapids_tools.storagelib import LocalPath
 from spark_rapids_tools.utils import Utilities
 
 
@@ -135,7 +137,12 @@ class RapidsTool(object):
         # make sure that output_folder is being absolute
         if self.output_folder is None:
             self.output_folder = Utils.get_rapids_tools_env('OUTPUT_DIRECTORY', os.getcwd())
-        self.output_folder = FSUtil.get_abs_path(self.output_folder)
+        try:
+            output_folder_path = LocalPath(self.output_folder)
+            self.output_folder = output_folder_path.no_prefix
+        except Exception as ex:  # pylint: disable=broad-except
+            self.logger.error('Failed in processing output arguments. Output_folder must be a local directory')
+            raise ex
         self.logger.debug('Root directory of local storage is set as: %s', self.output_folder)
         self.ctxt.set_local_workdir(self.output_folder)
         self.ctxt.load_prepackaged_resources()
@@ -151,14 +158,18 @@ class RapidsTool(object):
 
     @phase_banner('Process-Arguments')
     def _process_arguments(self):
-        # 0- process the output location
-        self._process_output_args()
-        # 1- process any arguments to be passed to the RAPIDS tool
-        self._process_rapids_args()
-        # 2- we need to process the arguments of the CLI
-        self._process_custom_args()
-        # 3- process submission arguments
-        self._process_job_submission_args()
+        try:
+            # 0- process the output location
+            self._process_output_args()
+            # 1- process any arguments to be passed to the RAPIDS tool
+            self._process_rapids_args()
+            # 2- we need to process the arguments of the CLI
+            self._process_custom_args()
+            # 3- process submission arguments
+            self._process_job_submission_args()
+        except Exception as ex:  # pylint: disable=broad-except
+            self.logger.error('Failed in processing arguments')
+            raise ex
 
     @phase_banner('Initialization')
     def _init_tool(self):
@@ -379,6 +390,19 @@ class RapidsTool(object):
         }
         return res
 
+    @classmethod
+    def get_rapids_tools_dependencies(cls, deploy_mode: str, json_props: AbstractPropertiesContainer) -> Optional[list]:
+        """
+        Get the tools dependencies from the platform configuration.
+        """
+        # allow defining default buildver per platform
+        buildver_from_conf = json_props.get_value_silent('dependencies', 'deployMode', deploy_mode, 'activeBuildVer')
+        active_buildver = get_spark_dep_version(buildver_from_conf)
+        depend_arr = json_props.get_value_silent('dependencies', 'deployMode', deploy_mode, active_buildver)
+        if depend_arr is None:
+            raise ValueError(f'Invalid SPARK dependency version [{active_buildver}]')
+        return depend_arr
+
 
 @dataclass
 class RapidsJarTool(RapidsTool):
@@ -387,14 +411,21 @@ class RapidsJarTool(RapidsTool):
     """
 
     def _process_jar_arg(self):
+        jar_path = ''
         tools_jar_url = self.wrapper_options.get('toolsJar')
-        if tools_jar_url is None:
-            tools_jar_url = self.ctxt.get_rapids_jar_url()
-        # download the jar
-        jar_path = self.ctxt.platform.storage.download_resource(tools_jar_url,
-                                                                self.ctxt.get_local_work_dir(),
-                                                                fail_ok=False,
-                                                                create_dir=True)
+        try:
+            if tools_jar_url is None:
+                tools_jar_url = self.ctxt.get_rapids_jar_url()
+            # download the jar
+            self.logger.info('Downloading the tools jars %s', tools_jar_url)
+            jar_path = self.ctxt.platform.storage.download_resource(tools_jar_url,
+                                                                    self.ctxt.get_local_work_dir(),
+                                                                    fail_ok=False,
+                                                                    create_dir=True)
+        except Exception as e:    # pylint: disable=broad-except
+            self.logger.exception('Exception occurred downloading jar %s', tools_jar_url)
+            raise e
+
         self.logger.info('RAPIDS accelerator tools jar is downloaded to work_dir %s', jar_path)
         # get the jar file name
         jar_file_name = FSUtil.get_resource_name(jar_path)
@@ -564,9 +595,7 @@ class RapidsJarTool(RapidsTool):
 
         # TODO: Verify the downloaded file by checking their MD5
         deploy_mode = DeployMode.tostring(self.ctxt.get_deploy_mode())
-        depend_arr = self.ctxt.platform.configs.get_value_silent('dependencies',
-                                                                 'deployMode',
-                                                                 deploy_mode)
+        depend_arr = self.get_rapids_tools_dependencies(deploy_mode, self.ctxt.platform.configs)
         if depend_arr:
             dep_list = cache_all_dependencies(depend_arr)
             if any(dep_item is None for dep_item in dep_list):

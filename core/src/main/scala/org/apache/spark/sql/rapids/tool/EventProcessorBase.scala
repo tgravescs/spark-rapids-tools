@@ -19,6 +19,7 @@ package org.apache.spark.sql.rapids.tool
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
+import com.nvidia.spark.rapids.SparkRapidsBuildInfoEvent
 import com.nvidia.spark.rapids.tool.profiling.{BlockManagerRemovedCase, DriverAccumCase, JobInfoClass, ProfileUtils, ResourceProfileInfoCase, SQLExecutionInfoClass, SQLPlanMetricsCase}
 
 import org.apache.spark.internal.Logging
@@ -96,6 +97,9 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
       case _: StreamingQueryListener.QueryTerminatedEvent =>
         doSparkListenerStreamingQuery(app,
           event.asInstanceOf[StreamingQueryListener.QueryTerminatedEvent])
+      case _: SparkRapidsBuildInfoEvent =>
+        doSparkRapidsBuildInfoEvent(app,
+          event.asInstanceOf[SparkRapidsBuildInfoEvent])
       case _ =>
         val wasResourceProfileAddedEvent = doSparkListenerResourceProfileAddedReflect(app, event)
         if (!wasResourceProfileAddedEvent) doOtherEvent(app, event)
@@ -148,7 +152,8 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
       hasDatasetOrRDD = false
     )
     app.sqlIdToInfo.put(event.executionId, sqlExecution)
-    app.sqlPlans += (event.executionId -> event.sparkPlanInfo)
+    app.sqlManager.addNewExecution(event.executionId, event.sparkPlanInfo,
+      event.physicalPlanDescription)
   }
 
   def doSparkListenerSQLExecutionEnd(
@@ -179,7 +184,8 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
       app: T,
       event: SparkListenerSQLAdaptiveExecutionUpdate): Unit = {
     // AQE plan can override the ones got from SparkListenerSQLExecutionStart
-    app.sqlPlans += (event.executionId -> event.sparkPlanInfo)
+    app.sqlManager.addAQE(event.executionId, event.sparkPlanInfo,
+      event.physicalPlanDescription)
   }
 
   def doSparkListenerSQLAdaptiveSQLMetricUpdates(
@@ -192,6 +198,13 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
         metric.accumulatorId, metric.metricType)
     }
     app.sqlPlanMetricsAdaptive ++= metrics
+  }
+
+  def doSparkRapidsBuildInfoEvent(
+      app: T,
+      event: SparkRapidsBuildInfoEvent): Unit  = {
+    logDebug("Processing event: " + event.getClass)
+    app.sparkRapidsBuildInfo = event
   }
 
   override def onOtherEvent(event: SparkListenerEvent): Unit = event match {
@@ -279,6 +292,7 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
       event: SparkListenerEnvironmentUpdate): Unit = {
     logDebug("Processing event: " + event.getClass)
     app.handleEnvUpdateForCachedProps(event)
+    app.registerAttemptId()
   }
 
   override def onEnvironmentUpdate(environmentUpdate: SparkListenerEnvironmentUpdate): Unit = {

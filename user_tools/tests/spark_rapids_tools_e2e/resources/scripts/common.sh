@@ -1,4 +1,6 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.
+#!/bin/bash
+
+# Copyright (c) 2024, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM python:3.8-slim-buster
+readonly E2E_TEST_HDFS_DIR="${E2E_TEST_TMP_DIR}/hadoop"
+export E2E_TEST_HDFS_DIR E2E_TEST_TMP_DIR
+export LC_ALL=C
 
-WORKDIR /
-COPY signoff-check .
-RUN pip install PyGithub && chmod +x /signoff-check
-
-# require envs: OWNER,REPO_NAME,GITHUB_TOKEN,PULL_NUMBER
-ENTRYPOINT ["/signoff-check"]
+err() {
+    echo "ERROR: $1" >&2
+    exit 1
+}

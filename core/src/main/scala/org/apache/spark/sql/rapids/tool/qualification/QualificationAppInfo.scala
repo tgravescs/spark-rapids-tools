@@ -646,7 +646,7 @@ class QualificationAppInfo(
         perSqlStageSummary.map(_.stageSum).flatten, estimatedInfo, perSqlInfos,
         unSupportedExecs, unSupportedExprs, clusterTags, allClusterTagsMap,
         mlFuncReportInfo.mlFunctionsAndStageInfo, mlFuncReportInfo.mlTotalStageDurations,
-        unsupportedOpsReason, clusterSummary)
+        unsupportedOpsReason, clusterSummary, calculateTotalCoreSec())
     }
   }
 
@@ -995,6 +995,7 @@ case class QualificationSummaryInfo(
     mlFunctionsStageDurations: Option[Seq[MLFuncsStageDuration]],
     unsupportedOpsReasons: Map[String, String],
     clusterSummary: ClusterSummary,
+    totalCoreSec: Long,
     estimatedFrequency: Option[Long] = None) extends Serializable
 
 case class StageQualSummaryInfo(
