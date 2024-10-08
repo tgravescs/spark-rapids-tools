@@ -206,6 +206,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
                   // no other app attempt just go on
               }
               progressBar.foreach(_.reportSuccessfulProcess())
+              logInfo("writing to memory manager")
               MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
               //allApps.put(app.appId, newQualSummary)
               val endTime = System.currentTimeMillis()

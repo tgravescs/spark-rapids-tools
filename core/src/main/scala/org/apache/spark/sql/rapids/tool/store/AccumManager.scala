@@ -31,40 +31,8 @@ class AccumManager {
     new mutable.HashMap[Long, AccumInfo]()
   }
 
-//  private val memoryManager = new MemoryManager()
-//  memoryManager.initialize()
-
   private def getOrCreateAccumInfo(id: Long, name: Option[String]): AccumInfo = {
-    val newAccumInfo = accumInfoMap.getOrElseUpdate(id, new AccumInfo(AccumMetaRef(id, name)))
-  /*  try{
-      val existingElement = MemoryManager.read(classOf[AccumInfo], id)
-      return existingElement
-    }
-    catch {
-      case e: NoSuchElementException =>
-        println(e.toString)
-        MemoryManager.write(new AccumInfo(AccumMetaRef(id, name)))
-    }
-//    println(s"Existing object -> $existingObject")
-    println("Before writing accumulable")
-    try{
-      println(s"The stored accum -> TaskUpdateMap - ${newAccumInfo.taskUpdatesMap}" +
-        s" StageValuesMap - ${newAccumInfo.stageValuesMap} " +
-        s" AccumMetaRef - ${newAccumInfo.infoRef.id} ${newAccumInfo.infoRef.name}")
-      MemoryManager.write(newAccumInfo)
-      val read_value = MemoryManager.read(classOf[AccumInfo], id)
-      println(s"The read_value -> TaskUpdateMap - ${read_value.taskUpdatesMap} " +
-        s"StageValuesMap - ${read_value.stageValuesMap} " +
-        s" AccumMetaRef - ${read_value.infoRef.id} ${read_value.infoRef.name}")
-      Thread.sleep(1000)
-    }
-    catch{
-      case e: Exception => println(e.toString)
-    }
-    println("After writing accumulable")
-
-   */
-    newAccumInfo
+    accumInfoMap.getOrElseUpdate(id, new AccumInfo(AccumMetaRef(id, name)))
   }
 
   def addAccToStage(stageId: Int, accumulableInfo: AccumulableInfo): Unit = {
