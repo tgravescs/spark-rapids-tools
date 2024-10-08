@@ -51,40 +51,44 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
   }
 
   def qualifyApps(allPaths: Seq[EventLogInfo]): Seq[QualificationSummaryInfo] = {
-    MemoryManager.initialize()
+    try {
+      MemoryManager.initialize(outputPath)
 
-    if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
-      progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
-    }
-    // generate metadata
-    generateRuntimeReport()
-
-    allPaths.foreach { path =>
-      try {
-        threadPool.submit(new QualifyThread(path))
-      } catch {
-        case e: Exception =>
-          logError(s"Unexpected exception submitting log ${path.eventLog.toString}, skipping!", e)
+      if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
+        progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
       }
-    }
-    // wait for the threads to finish processing the files
-    threadPool.shutdown()
-    if (!threadPool.awaitTermination(waitTimeInSec, TimeUnit.SECONDS)) {
-      logError(s"Processing log files took longer then $waitTimeInSec seconds," +
-        " stopping processing any more event logs")
-      threadPool.shutdownNow()
-    }
-    progressBar.foreach(_.finishAll())
-    // TODO - changed ot map with app id - need to handle
-    val allAppsFromView =
-      MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
+      // generate metadata
+      generateRuntimeReport()
 
-    val allAppsSum = estimateAppFrequency(allAppsFromView)
-    // sort order and limit only applies to the report summary text file,
-    // the csv file we write the entire data in descending order
-    val sortedDescDetailed = sortDescForDetailedReport(allAppsSum)
-    generateQualificationReport(allAppsSum, sortedDescDetailed)
-    sortedDescDetailed
+      allPaths.foreach { path =>
+        try {
+          threadPool.submit(new QualifyThread(path))
+        } catch {
+          case e: Exception =>
+            logError(s"Unexpected exception submitting log ${path.eventLog.toString}, skipping!", e)
+        }
+      }
+      // wait for the threads to finish processing the files
+      threadPool.shutdown()
+      if (!threadPool.awaitTermination(waitTimeInSec, TimeUnit.SECONDS)) {
+        logError(s"Processing log files took longer then $waitTimeInSec seconds," +
+          " stopping processing any more event logs")
+        threadPool.shutdownNow()
+      }
+      progressBar.foreach(_.finishAll())
+      // TODO - changed ot map with app id - need to handle
+      val allAppsFromView =
+        MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
+
+      val allAppsSum = estimateAppFrequency(allAppsFromView)
+      // sort order and limit only applies to the report summary text file,
+      // the csv file we write the entire data in descending order
+      val sortedDescDetailed = sortDescForDetailedReport(allAppsSum)
+      generateQualificationReport(allAppsSum, sortedDescDetailed)
+      sortedDescDetailed
+    } finally {
+      //MemoryManager.deleteDB()
+    }
   }
 
   private def sortDescForDetailedReport(
@@ -192,9 +196,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
             AppSubscriber.withSafeValidAttempt(app.appId, app.attemptId) { () =>
               val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
               // check if the app is already in the map
-              // TODO - need to handle multiple apps in DB
               try {
-                MemoryManager.read(classOf[QualificationSummaryInfoWrapper], app.appId)
                 MemoryManager.delete(classOf[QualificationSummaryInfoWrapper], app.appId)
                 logInfo(s"Removed older app summary for app: ${app.appId} " +
                   s"before adding the new one with attempt: ${app.attemptId}")
@@ -203,14 +205,6 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
                 case _: NoSuchElementException =>
                   // no other app attempt just go on
               }
-             /* if (allApps.containsKey(app.appId)) {
-                // fix the progress bar counts
-                progressBar.foreach(_.adjustCounterForMultipleAttempts())
-                logInfo(s"Removing older app summary for app: ${app.appId} " +
-                  s"before adding the new one with attempt: ${app.attemptId}")
-              }
-
-              */
               progressBar.foreach(_.reportSuccessfulProcess())
               MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
               //allApps.put(app.appId, newQualSummary)
