@@ -26,7 +26,7 @@ import org.apache.spark.sql.rapids.tool.util.StringUtils
  * This maintains references to all accumulator names
  * @param value the accumulator name to be stored
  */
-case class AccumNameRef (value: String) {
+case class AccumNameRef(value: String) {
   // generate and store the CSV formatted name as it is used by multiple rows, and it can be shared
   // by multiple threads.
   // There is a tradeoff between caching this value Vs generating it every time.

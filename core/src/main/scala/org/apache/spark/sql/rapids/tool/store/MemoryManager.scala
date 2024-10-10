@@ -16,6 +16,7 @@
 package org.apache.spark.sql.rapids.tool.store
 
 import java.io.File
+import java.net.URI
 
 import scala.util.control.NonFatal
 
@@ -32,7 +33,9 @@ object MemoryManager extends Logging {
   private var finalStoreLoc: String = ""
 
   def initialize(outputPath: String): Unit = {
-    finalStoreLoc = outputPath + "/appSummaries"
+    // make sure to remove any scheme like file:// but what if they specified hdfs output?
+    // create a store.path type config
+    finalStoreLoc = new URI(outputPath + "/appSummaries").getPath
     // force ROCKSDB
     sparkConf.set("spark.history.store.hybridStore.diskBackend", "ROCKSDB")
     logInfo(s"ROCKSDB location is: $finalStoreLoc")
