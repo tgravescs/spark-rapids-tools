@@ -28,7 +28,7 @@ import org.apache.hadoop.conf.Configuration
 
 import org.apache.spark.sql.rapids.tool.FailureApp
 import org.apache.spark.sql.rapids.tool.qualification._
-import org.apache.spark.sql.rapids.tool.store.MemoryManager
+import org.apache.spark.sql.rapids.tool.store.ToolKVStore
 import org.apache.spark.sql.rapids.tool.ui.ConsoleProgressBar
 import org.apache.spark.sql.rapids.tool.util._
 
@@ -38,7 +38,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
     printStdout: Boolean, enablePB: Boolean,
     reportSqlLevel: Boolean, maxSQLDescLength: Int, mlOpsEnabled:Boolean,
     penalizeTransitions: Boolean, tunerContext: Option[TunerContext],
-    clusterReport: Boolean) extends ToolBase(timeout) {
+    clusterReport: Boolean, localStorePath: String) extends ToolBase(timeout) {
 
   override val simpleName: String = "qualTool"
   override val outputDir = s"$outputPath/rapids_4_spark_qualification_output"
@@ -52,7 +52,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
 
   def qualifyApps(allPaths: Seq[EventLogInfo]): Seq[QualificationSummaryInfo] = {
     try {
-      MemoryManager.initialize(outputPath)
+      ToolKVStore.initialize(localStorePath)
 
       if (enablePB && allPaths.nonEmpty) { // total count to start the PB cannot be 0
         progressBar = Some(new ConsoleProgressBar("Qual Tool", allPaths.length))
@@ -78,7 +78,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
       progressBar.foreach(_.finishAll())
       // TODO - changed ot map with app id - need to handle
       val allAppsFromView =
-        MemoryManager.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
+        ToolKVStore.viewToSeq(classOf[QualificationSummaryInfoWrapper]).map(_.info)
 
       val allAppsSum = estimateAppFrequency(allAppsFromView)
       // sort order and limit only applies to the report summary text file,
@@ -87,7 +87,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
       generateQualificationReport(allAppsSum, sortedDescDetailed)
       sortedDescDetailed
     } finally {
-      //MemoryManager.deleteDB()
+      ToolKVStore.deleteDB()
     }
   }
 
@@ -197,7 +197,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
               val newQualSummary = tempSummary.copy(clusterSummary = newClusterSummary)
               // check if the app is already in the map
               try {
-                MemoryManager.delete(classOf[QualificationSummaryInfoWrapper], app.appId)
+                ToolKVStore.delete(classOf[QualificationSummaryInfoWrapper], app.appId)
                 logInfo(s"Removed older app summary for app: ${app.appId} " +
                   s"before adding the new one with attempt: ${app.attemptId}")
                 progressBar.foreach(_.adjustCounterForMultipleAttempts())
@@ -207,7 +207,7 @@ class Qualification(outputPath: String, numRows: Int, hadoopConf: Configuration,
               }
               progressBar.foreach(_.reportSuccessfulProcess())
               logInfo("writing to memory manager")
-              MemoryManager.write(new QualificationSummaryInfoWrapper(newQualSummary))
+              ToolKVStore.write(new QualificationSummaryInfoWrapper(newQualSummary))
               //allApps.put(app.appId, newQualSummary)
               val endTime = System.currentTimeMillis()
               SuccessAppResult(pathStr, app.appId, app.attemptId,

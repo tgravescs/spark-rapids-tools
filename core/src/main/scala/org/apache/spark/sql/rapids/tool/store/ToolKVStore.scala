@@ -17,45 +17,62 @@ package org.apache.spark.sql.rapids.tool.store
 
 import java.io.File
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 import scala.util.control.NonFatal
 
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.tool.qualification.QualificationSummaryInfo
 import org.apache.spark.status.KVUtils
 import org.apache.spark.util.Utils
 import org.apache.spark.util.kvstore.{KVStore, KVStoreView}
 
-object MemoryManager extends Logging {
+/**
+ * Key Value store base class.  Currently hardcoded to use the Spark
+ * ROCKSDB implementation of org.apache.spark.util.kvstore.KVStore.
+ *
+ * This class could be extended to have logic on decided which backend
+ * store is most efficient. For instance, memory or disk store.
+ */
+object ToolKVStore extends Logging {
 
   private val sparkConf = new SparkConf()
-  private var listing: KVStore = null
+  private var appSummaries: KVStore = null
   private var finalStoreLoc: String = ""
+  private val DB_DIR_NAME = "qual_store_path"
+  private val APP_SUMMARY_DB_DIR = "appSummaries"
+  private val allApps = new ConcurrentHashMap[String, QualificationSummaryInfo]()
 
-  def initialize(outputPath: String): Unit = {
+
+  def initialize(localStorePath: String): Unit = {
     // make sure to remove any scheme like file:// but what if they specified hdfs output?
     // create a store.path type config
-    finalStoreLoc = new URI(outputPath + "/appSummaries").getPath
+    logWarning("localStorePath before: " + localStorePath)
+    finalStoreLoc = new URI(localStorePath + "/" + DB_DIR_NAME).getPath
+    val appSummaryDbLoc = new URI(finalStoreLoc + "/" + APP_SUMMARY_DB_DIR).getPath
+    logWarning("appSummaryDbLoc after: " + appSummaryDbLoc)
+
     // force ROCKSDB
     sparkConf.set("spark.history.store.hybridStore.diskBackend", "ROCKSDB")
     logInfo(s"ROCKSDB location is: $finalStoreLoc")
-    listing = KVUtils.createKVStore(Option(new File(finalStoreLoc)), live = false, sparkConf)
+    appSummaries = KVUtils.createKVStore(Option(new File(finalStoreLoc)), live = false, sparkConf)
   }
 
   def write[T](obj: T): Unit = {
-      listing.write(obj)
+    appSummaries.write(obj)
   }
 
   def read[T](klass: Class[T], key: Any): T = {
-      listing.read(klass, key)
+    appSummaries.read(klass, key)
   }
 
   def delete[T](klass: Class[T], key: Any): Unit = {
-    listing.delete(klass, key)
+    appSummaries.delete(klass, key)
   }
 
   def view[T](klass: Class[T]): KVStoreView[T] = {
-    listing.view(klass)
+    appSummaries.view(klass)
   }
 
   def viewToSeq[T](klass: Class[T]): Seq[T] = {

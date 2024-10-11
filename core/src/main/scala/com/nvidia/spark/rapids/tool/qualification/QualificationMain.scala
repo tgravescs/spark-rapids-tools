@@ -54,6 +54,7 @@ object QualificationMain extends Logging {
     val maxEventLogSize = appArgs.maxEventLogSize.toOption
     val matchEventLogs = appArgs.matchEventLogs
     val outputDirectory = appArgs.outputDirectory().stripSuffix("/")
+    val localStorePath = appArgs.localStorePath().stripSuffix("/")
     val numOutputRows = appArgs.numOutputRows.getOrElse(1000)
     val maxSQLDescLength = appArgs.maxSqlDescLength.getOrElse(100)
 
@@ -116,7 +117,7 @@ object QualificationMain extends Logging {
     val qual = new Qualification(outputDirectory, numOutputRows, hadoopConf, timeout,
       nThreads, order, pluginTypeChecker, reportReadSchema, printStdout,
       enablePB, reportSqlLevel, maxSQLDescLength, mlOpsEnabled, penalizeTransitions,
-      tunerContext, appArgs.clusterReport())
+      tunerContext, appArgs.clusterReport(), localStorePath)
     val res = qual.qualifyApps(filteredLogs)
     (0, res)
   }

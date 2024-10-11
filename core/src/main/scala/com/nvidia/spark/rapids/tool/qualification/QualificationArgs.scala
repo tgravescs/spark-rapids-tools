@@ -202,6 +202,11 @@ Usage: java -cp rapids-4-spark-tools_2.12-<version>.jar:$SPARK_HOME/jars/*
       prefix = "no-",
       descrYes = "Generate a cluster information file. Enabled by default.",
       descrNo = "Do not generate the cluster information file.")
+  val localStorePath: ScallopOption[String] =
+    opt[String](required = false,
+      descr = "Local filesystem directory to store application data on disk instead of keeping it" +
+        " in memory.",
+      default = Some("/tmp"))
 
   validate(order) {
     case o if (QualificationArgs.isOrderAsc(o) || QualificationArgs.isOrderDesc(o)) => Right(Unit)
